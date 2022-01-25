@@ -1,0 +1,10 @@
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib"
+
+    testImplementation(group: 'org.jetbrains.kotlin', name: 'kotlin-test')
+    testImplementation(group: 'org.jetbrains.kotlin', name: 'kotlin-test-junit5')
+}
+
+test {
+    useJUnitPlatform()
+}
