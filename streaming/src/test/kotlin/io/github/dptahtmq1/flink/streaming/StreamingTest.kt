@@ -25,12 +25,13 @@ class StreamingTest : JobTest() {
         // Given
         val windowCount = 2
         val batchIntervalMs = 1000L
+        val batchCount = 100L
 
         val record1 = User("test1", 10, Instant.ofEpochMilli(1001))
         val record2 = User("test2", 15, Instant.ofEpochMilli(1002))
         val record3 = User("test3", 15, Instant.ofEpochMilli(1003))
 
-        val app = Streaming(windowCount, batchIntervalMs)
+        val app = Streaming(windowCount, batchIntervalMs, batchCount)
 
         // Create kafka source
         val kafkaSource = createKafkaSource()
@@ -50,6 +51,41 @@ class StreamingTest : JobTest() {
         // Then
         val result = collectSink.getValues()
         assertEquals(2, result.size)
+    }
+
+    @Test
+    fun `should aggregate and sink by batch count`() {
+        // Given
+        val windowCount = 1
+        val batchIntervalMs = 1000L
+        val batchCount = 2L
+
+        val record1 = User("test1", 10, Instant.ofEpochMilli(1001))
+        val record2 = User("test2", 15, Instant.ofEpochMilli(1002))
+        val record3 = User("test3", 15, Instant.ofEpochMilli(1003))
+
+        val app = Streaming(windowCount, batchIntervalMs, batchCount)
+
+        // Create kafka source
+        val kafkaSource = createKafkaSource()
+        val sourceStream = app.environment.addSource(kafkaSource)
+
+        // Create kafka producer and send record
+        val kafkaProducer = TestStreamUtils.createKafkaProducer<ByteArray, ByteArray>()
+        kafkaProducer.send(ProducerRecord(topic, record1.name.toByteArray(), SerializationUtils.serialize(record1)))
+        kafkaProducer.send(ProducerRecord(topic, record2.name.toByteArray(), SerializationUtils.serialize(record2)))
+        kafkaProducer.send(ProducerRecord(topic, record3.name.toByteArray(), SerializationUtils.serialize(record3)))
+
+        // When
+        app.build(sourceStream, collectSink)
+        app.environment.parallelism = 1
+        app.environment.executeDuringDuration(Duration.ofMillis(5000L))
+
+        // Then
+        val result = collectSink.getValues()
+        assertEquals(2, result.size)
+        assertEquals(2, result[0].size)
+        assertEquals(1, result[1].size)
     }
 
     private fun createKafkaSource(): SourceFunction<User> {

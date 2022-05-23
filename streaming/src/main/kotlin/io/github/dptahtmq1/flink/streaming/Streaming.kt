@@ -3,6 +3,7 @@ package io.github.dptahtmq1.flink.streaming
 import io.github.dptahtmq1.flink.streaming.functions.BatchKeySelector
 import io.github.dptahtmq1.flink.streaming.functions.PassRecordProcessWindowFunction
 import io.github.dptahtmq1.flink.streaming.model.User
+import io.github.dptahtmq1.flink.streaming.window.TimeAndCountWindowTrigger
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
 import org.apache.flink.streaming.api.functions.sink.SinkFunction
@@ -11,7 +12,8 @@ import org.apache.flink.streaming.api.windowing.time.Time
 
 class Streaming(
     private val windowCount: Int,
-    private val batchInterval: Long
+    private val batchInterval: Long,
+    private val batchCount: Long
 ) {
     val environment: StreamExecutionEnvironment = StreamExecutionEnvironment.getExecutionEnvironment()
 
@@ -28,6 +30,7 @@ class Streaming(
             .uid("streaming-example")
             .keyBy(BatchKeySelector(windowCount))
             .window(TumblingProcessingTimeWindows.of(Time.milliseconds(batchInterval)))
+            .trigger(TimeAndCountWindowTrigger(batchCount))
             .process(PassRecordProcessWindowFunction())
             .addSink(sinkFunction)
             .name("name")
