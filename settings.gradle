@@ -1,8 +1,9 @@
 include 'sql'
+include 'streaming'
 
 rootProject.name = 'flink-study'
 rootProject.children.each { project ->
-    project.buildFileName = "build.gradle"
+    project.buildFileName = "streaming.gradle"
     setSubprojectBuildFile(project)
 }
 
