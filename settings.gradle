@@ -1,5 +1,6 @@
 include 'sql'
 include 'streaming'
+include 'sql-join'
 
 rootProject.name = 'flink-study'
 rootProject.children.each { project ->
