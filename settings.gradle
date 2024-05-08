@@ -1,5 +1,6 @@
 include 'sql'
 include 'streaming'
+include 'streaming-sql'
 include 'sql-join'
 
 rootProject.name = 'flink-study'
