@@ -1,6 +1,7 @@
 package io.github.dptahtmq1.flink.sql
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import io.github.dptahtmq1.flink.sql.common.EventType
 import io.github.dptahtmq1.flink.sql.model.EnrichedOrder
 import io.github.dptahtmq1.flink.sql.model.Order
 import io.github.dptahtmq1.flink.sql.model.User
@@ -176,6 +177,78 @@ class CompactTopicApplicationTest {
         assertEquals(3, sink.getValues().size)
     }
 
+    @Test
+    fun `should get values from user topic as a changelog stream`() {
+        // Given
+        val parameterTool = ParameterTool.fromMap(
+            mapOf(
+                "KafkaBroker" to kafka.bootstrapServers,
+                "KafkaSourceBounded" to "true"
+            )
+        )
+
+        val kafkaProducer = createKafkaProducer<ByteArray, ByteArray>(parameterTool)
+
+        val current = System.currentTimeMillis()
+        val user1 = User(1, "test1", current)
+        val user2 = User(2, "test2", current)
+        val user3 = User(3, "test3", current + 1000)
+        send(kafkaProducer, userTopic, user1)
+        send(kafkaProducer, userTopic, user2)
+        send(kafkaProducer, userTopic, user3)
+
+        val changedUser1 = User(1, "test1-changed", current + 5000)
+        send(kafkaProducer, userTopic, changedUser1)
+
+        val order1 = Order(1, 1, 100, current)
+        val order2 = Order(2, 1, 200, current + 1500)
+        val order3 = Order(3, 1, 300, current + 5000)  // should be stored
+        val order4 = Order(4, 4, 300, current + 5000)  // should be dropped
+        send(kafkaProducer, orderTopic, order1)
+        send(kafkaProducer, orderTopic, order2)
+        send(kafkaProducer, orderTopic, order3)
+        send(kafkaProducer, orderTopic, order4)
+
+        // delete user case
+        val deletedUser2 = User(2, "test2", current + 5000, EventType.DELETE)
+        send(kafkaProducer, userTopic, deletedUser2)
+        val order5 = Order(5, 2, 300, current + 6000)  // should be dropped
+        send(kafkaProducer, orderTopic, order5)
+
+        // When
+        val app = CompactTopicApplication()
+
+        val userKafkaSource = createKafkaSource(
+            parameterTool,
+            userTopic,
+            UserJsonSchema()
+        )
+        val userSource = app.environment.fromSource(
+            userKafkaSource,
+            WatermarkStrategy.noWatermarks(),
+            "compact-kafka"
+        )
+
+        val orderKafkaSource = createKafkaSource(
+            parameterTool,
+            orderTopic,
+            OrderJsonSchema()
+        )
+        val orderSource = app.environment.fromSource(
+            orderKafkaSource,
+            WatermarkStrategy.noWatermarks(),
+            "order-topic"
+        )
+
+        val sink = CollectSink()
+        app.buildWithChangelogStream(userSource, orderSource, sink)
+        app.environment.execute()
+
+        // Then
+        println(sink.getValues())
+        assertEquals(3, sink.getValues().size)
+    }
+
     @AfterTest
     fun teardown() {
         val client = AdminClient.create(
@@ -201,10 +274,6 @@ class CompactTopicApplicationTest {
                 objectMapper.writeValueAsBytes(order)
             )
         ).get()
-    }
-
-    private fun sendUserDelete(kafkaProducer: KafkaProducer<ByteArray, ByteArray>, topic: String, user: User) {
-        kafkaProducer.send(ProducerRecord(topic, user.name.toByteArray(), null)).get()
     }
 
     private fun <T> createKafkaSource(
