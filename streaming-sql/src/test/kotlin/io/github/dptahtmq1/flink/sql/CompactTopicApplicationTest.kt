@@ -9,6 +9,7 @@ import io.github.dptahtmq1.flink.sql.schema.UserJsonSchema
 import org.apache.flink.api.common.eventtime.WatermarkStrategy
 import org.apache.flink.api.java.utils.ParameterTool
 import org.apache.flink.connector.kafka.source.KafkaSource
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer
 import org.apache.flink.connector.kafka.source.reader.deserializer.KafkaRecordDeserializationSchema
 import org.apache.flink.streaming.api.functions.sink.SinkFunction
 import org.apache.kafka.clients.admin.AdminClient
@@ -25,7 +26,6 @@ import java.time.Duration
 import java.util.*
 import java.util.concurrent.locks.ReadWriteLock
 import java.util.concurrent.locks.ReentrantReadWriteLock
-import kotlin.concurrent.schedule
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -80,16 +80,13 @@ class CompactTopicApplicationTest {
         val user3 = User(3, "test3", current + 25000)
 
         val kafkaProducer = createKafkaProducer<ByteArray, ByteArray>(parameterTool)
-        kafkaProducer.send(ProducerRecord(userTopic, user1.name.toByteArray(), objectMapper.writeValueAsBytes(user1)))
-            .get()
-        kafkaProducer.send(ProducerRecord(userTopic, user2.name.toByteArray(), objectMapper.writeValueAsBytes(user2)))
-            .get()
-        kafkaProducer.send(ProducerRecord(userTopic, user3.name.toByteArray(), objectMapper.writeValueAsBytes(user3)))
-            .get()
+        send(kafkaProducer, userTopic, user1)
+        send(kafkaProducer, userTopic, user2)
+        send(kafkaProducer, userTopic, user3)
 
         val order1 = Order(1, 1, 100, current)
         val order2 = Order(2, 1, 200, current + 1500)
-        val order3 = Order(3, 1, 300, current + 10000)
+        val order3 = Order(3, 1, 300, current + 5000)
 
         // When
         val app = CompactTopicApplication()
@@ -104,7 +101,7 @@ class CompactTopicApplicationTest {
             "compact-kafka"
         )
         val orderSource = app.environment.fromElements(order1, order2, order3)
-        val sink = CollectSink<EnrichedOrder>()
+        val sink = CollectSink()
         app.build(userSource, orderSource, sink)
         app.environment.executeDuringDuration(Duration.ofSeconds(15))
 
@@ -118,86 +115,32 @@ class CompactTopicApplicationTest {
         // Given
         val parameterTool = ParameterTool.fromMap(
             mapOf(
-                "KafkaBroker" to kafka.bootstrapServers
+                "KafkaBroker" to kafka.bootstrapServers,
+                "KafkaSourceBounded" to "true"
             )
         )
+
+        val kafkaProducer = createKafkaProducer<ByteArray, ByteArray>(parameterTool)
 
         val current = System.currentTimeMillis()
         val user1 = User(1, "test1", current)
         val user2 = User(2, "test2", current)
-        val user3 = User(3, "test3", current + 25000)
+        val user3 = User(3, "test3", current + 1000)
+        send(kafkaProducer, userTopic, user1)
+        send(kafkaProducer, userTopic, user2)
+        send(kafkaProducer, userTopic, user3)
 
-        val kafkaProducer = createKafkaProducer<ByteArray, ByteArray>(parameterTool)
-        kafkaProducer.send(ProducerRecord(userTopic, user1.name.toByteArray(), objectMapper.writeValueAsBytes(user1)))
-            .get()
-        kafkaProducer.send(ProducerRecord(userTopic, user2.name.toByteArray(), objectMapper.writeValueAsBytes(user2)))
-            .get()
-        kafkaProducer.send(ProducerRecord(userTopic, user3.name.toByteArray(), objectMapper.writeValueAsBytes(user3)))
-            .get()
+        val changedUser1 = User(1, "test1-changed", current + 5000)
+        send(kafkaProducer, userTopic, changedUser1)
 
         val order1 = Order(1, 1, 100, current)
         val order2 = Order(2, 1, 200, current + 1500)
-
-        kafkaProducer.send(
-            ProducerRecord(
-                orderTopic,
-                order1.id.toString().toByteArray(),
-                objectMapper.writeValueAsBytes(order1)
-            )
-        ).get()
-        kafkaProducer.send(
-            ProducerRecord(
-                orderTopic,
-                order2.id.toString().toByteArray(),
-                objectMapper.writeValueAsBytes(order2)
-            )
-        ).get()
-
-        Timer().schedule(5000L) {
-            val order3 = Order(3, 1, 300, current + 10000)  // should be stored
-            val order4 = Order(4, 4, 300, current + 10000)  // should be dropped
-            kafkaProducer.send(
-                ProducerRecord(
-                    orderTopic,
-                    order3.id.toString().toByteArray(),
-                    objectMapper.writeValueAsBytes(order3)
-                )
-            ).get()
-            kafkaProducer.send(
-                ProducerRecord(
-                    orderTopic,
-                    order4.id.toString().toByteArray(),
-                    objectMapper.writeValueAsBytes(order4)
-                )
-            ).get()
-
-            val user4 = User(4, "test4", current + 10000)
-            kafkaProducer.send(
-                ProducerRecord(
-                    userTopic,
-                    user4.name.toByteArray(),
-                    objectMapper.writeValueAsBytes(user4)
-                )
-            ).get()
-
-            val changedUser1 = User(1, "test1-changed", current + 10000)
-            kafkaProducer.send(
-                ProducerRecord(
-                    userTopic,
-                    changedUser1.name.toByteArray(),
-                    objectMapper.writeValueAsBytes(changedUser1)
-                )
-            ).get()
-
-            val order5 = Order(5, 1, 300, current + 10000)  // should be stored with changed user1
-            kafkaProducer.send(
-                ProducerRecord(
-                    orderTopic,
-                    order5.id.toString().toByteArray(),
-                    objectMapper.writeValueAsBytes(order5)
-                )
-            ).get()
-        }
+        val order3 = Order(3, 1, 300, current + 5000)  // should be stored
+        val order4 = Order(4, 4, 300, current + 5000)  // should be dropped
+        send(kafkaProducer, orderTopic, order1)
+        send(kafkaProducer, orderTopic, order2)
+        send(kafkaProducer, orderTopic, order3)
+        send(kafkaProducer, orderTopic, order4)
 
         // When
         val app = CompactTopicApplication()
@@ -224,13 +167,13 @@ class CompactTopicApplicationTest {
             "order-topic"
         )
 
-        val sink = CollectSink<EnrichedOrder>()
+        val sink = CollectSink()
         app.build(userSource, orderSource, sink)
-        app.environment.executeDuringDuration(Duration.ofSeconds(15))
+        app.environment.execute()
 
         // Then
         println(sink.getValues())
-        assertEquals(5, sink.getValues().size)
+        assertEquals(3, sink.getValues().size)
     }
 
     @AfterTest
@@ -240,9 +183,28 @@ class CompactTopicApplicationTest {
                 AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG to kafka.bootstrapServers
             )
         )
-        client.deleteTopics(listOf(userTopic))
+        client.deleteTopics(listOf(userTopic, orderTopic))
 
         kafka.stop()
+    }
+
+    private fun send(kafkaProducer: KafkaProducer<ByteArray, ByteArray>, topic: String, user: User) {
+        kafkaProducer.send(ProducerRecord(topic, user.name.toByteArray(), objectMapper.writeValueAsBytes(user)))
+            .get()
+    }
+
+    private fun send(kafkaProducer: KafkaProducer<ByteArray, ByteArray>, topic: String, order: Order) {
+        kafkaProducer.send(
+            ProducerRecord(
+                topic,
+                order.id.toString().toByteArray(),
+                objectMapper.writeValueAsBytes(order)
+            )
+        ).get()
+    }
+
+    private fun sendUserDelete(kafkaProducer: KafkaProducer<ByteArray, ByteArray>, topic: String, user: User) {
+        kafkaProducer.send(ProducerRecord(topic, user.name.toByteArray(), null)).get()
     }
 
     private fun <T> createKafkaSource(
@@ -256,11 +218,16 @@ class CompactTopicApplicationTest {
             it.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, params.get("KafkaInitialOffset", "earliest"))
         }
 
-        return KafkaSource.builder<T>()
+        val builder = KafkaSource.builder<T>()
             .setProperties(properties)
             .setDeserializer(schema)
             .setTopics(topic)
-            .build()
+
+        if (params.getBoolean("KafkaSourceBounded", false)) {
+            builder.setBounded(OffsetsInitializer.latest())
+        }
+
+        return builder.build()
     }
 
     private fun <K, V> createKafkaProducer(params: ParameterTool): KafkaProducer<K, V> {
@@ -273,25 +240,26 @@ class CompactTopicApplicationTest {
         return KafkaProducer<K, V>(properties)
     }
 
-    class CollectSink<T : Any> : SinkFunction<T> {
+    class CollectSink : SinkFunction<EnrichedOrder> {
         companion object {
             private val values = mutableListOf<Any>()
             private val readWriteLock: ReadWriteLock = ReentrantReadWriteLock()
         }
 
-        override fun invoke(value: T, context: SinkFunction.Context) {
+        override fun invoke(value: EnrichedOrder, context: SinkFunction.Context) {
             readWriteLock.writeLock().lock()
             try {
+                println("$value, elapsed: ${System.currentTimeMillis() - value.eventTime}")
                 values.add(value)
             } finally {
                 readWriteLock.writeLock().unlock()
             }
         }
 
-        fun getValues(): List<T> {
+        fun getValues(): List<EnrichedOrder> {
             readWriteLock.readLock().lock()
             try {
-                return Collections.unmodifiableList(values) as List<T>
+                return Collections.unmodifiableList(values) as List<EnrichedOrder>
             } finally {
                 readWriteLock.readLock().unlock()
             }
